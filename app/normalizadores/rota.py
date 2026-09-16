@@ -1,11 +1,16 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from app.exceptions import ErroNormalizacao
 from app.models.viagem import ViagemNormalizada, Local, Preco
 from app.normalizadores.base import NormalizadorStrategy
 
 
 class RotaStrategy(NormalizadorStrategy):
+
+    @property
+    def nome_empresa(self) -> str:
+        return "Rota Transportes"
 
     def reconhece(self, dados: dict) -> bool:
         campos = {
@@ -21,57 +26,211 @@ class RotaStrategy(NormalizadorStrategy):
             "vagas",
         }
 
-        return campos.issubset(dados.keys())
+        encontrados = campos.intersection(dados.keys())
+
+        return len(encontrados) >= 2
 
     def normalizar(self, dados: dict) -> ViagemNormalizada:
-        partida = self._converter_data(
-            dados["partida_em"]
-        )
+        campos_obrigatorios = [
+            "trip_id",
+            "origem",
+            "destino",
+            "partida_em",
+            "chegada_em",
+            "duracao_minutos",
+            "tarifa_centavos",
+            "moeda",
+            "classe",
+            "vagas",
+        ]
 
-        chegada = self._converter_data(
-            dados["chegada_em"]
-        )
+        for campo in campos_obrigatorios:
+            if campo not in dados:
+                raise ErroNormalizacao(
+                    indice=-1,
+                    empresa_identificada=self.nome_empresa,
+                    campo=campo,
+                    mensagem=f"O campo obrigatório '{campo}' não foi informado.",
+                )
 
-        duracao = self._converter_duracao(
-            dados["duracao_minutos"]
-        )
+        origem = dados["origem"]
+        destino = dados["destino"]
 
-        preco = self._converter_preco(
-            dados["tarifa_centavos"],
-            dados["moeda"],
-        )
+        if not isinstance(origem, dict):
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="origem",
+                mensagem="O campo 'origem' deve ser um objeto.",
+            )
 
-        categoria = self._normalizar_categoria(
-            dados["classe"]
-        )
+        if not isinstance(destino, dict):
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="destino",
+                mensagem="O campo 'destino' deve ser um objeto.",
+            )
 
-        self._validar_viagem(
-            partida,
-            chegada,
-            duracao,
-            preco,
-            dados["vagas"],
-            dados["origem"],
-            dados["destino"],
-        )
+        for campo in ["cidade", "uf"]:
+            if campo not in origem:
+                raise ErroNormalizacao(
+                    indice=-1,
+                    empresa_identificada=self.nome_empresa,
+                    campo=f"origem.{campo}",
+                    mensagem=f"O campo obrigatório 'origem.{campo}' não foi informado.",
+                )
+
+            if campo not in destino:
+                raise ErroNormalizacao(
+                    indice=-1,
+                    empresa_identificada=self.nome_empresa,
+                    campo=f"destino.{campo}",
+                    mensagem=f"O campo obrigatório 'destino.{campo}' não foi informado.",
+                )
+
+        if len(origem["uf"]) != 2:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="origem.uf",
+                mensagem="A UF de origem deve possuir exatamente 2 caracteres.",
+            )
+
+        if len(destino["uf"]) != 2:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="destino.uf",
+                mensagem="A UF de destino deve possuir exatamente 2 caracteres.",
+            )
+
+        try:
+            partida = self._converter_data(dados["partida_em"])
+        except Exception:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="partida_em",
+                mensagem="A data de saída é inválida.",
+            )
+
+        try:
+            chegada = self._converter_data(dados["chegada_em"])
+        except Exception:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="chegada_em",
+                mensagem="A data de chegada é inválida.",
+            )
+
+        if chegada <= partida:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="chegada_em",
+                mensagem="A data de chegada deve ser posterior à data de saída.",
+            )
+
+        try:
+            duracao = int(dados["duracao_minutos"])
+        except (TypeError, ValueError):
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="duracao_minutos",
+                mensagem="A duração deve ser um número inteiro válido.",
+            )
+
+        if duracao <= 0:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="duracao_minutos",
+                mensagem="A duração deve ser maior que zero.",
+            )
+
+        duracao_real = int((chegada - partida).total_seconds() / 60)
+
+        if duracao != duracao_real:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="duracao_minutos",
+                mensagem="A duração informada é incompatível com os horários de saída e chegada.",
+            )
+
+        try:
+            tarifa_centavos = float(dados["tarifa_centavos"])
+        except (TypeError, ValueError):
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="tarifa_centavos",
+                mensagem="A tarifa deve ser um número válido.",
+            )
+
+        if tarifa_centavos <= 0:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="tarifa_centavos",
+                mensagem="A tarifa deve ser maior que zero.",
+            )
+
+        valor = tarifa_centavos / 100
+
+        try:
+            vagas = int(dados["vagas"])
+        except (TypeError, ValueError):
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="vagas",
+                mensagem="A quantidade de vagas deve ser um número inteiro válido.",
+            )
+
+        if vagas < 0:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="vagas",
+                mensagem="A quantidade de vagas não pode ser negativa.",
+            )
+
+        categoria = self._normalizar_categoria(dados["classe"])
+
+        if categoria is None:
+            raise ErroNormalizacao(
+                indice=-1,
+                empresa_identificada=self.nome_empresa,
+                campo="classe",
+                mensagem="A categoria informada não pode ser normalizada.",
+            )
+
+        moeda = str(dados["moeda"]).upper()
 
         return ViagemNormalizada(
             id_viagem=str(dados["trip_id"]),
-            empresa="Rota Transportes",
+            empresa=self.nome_empresa,
             origem=Local(
-                cidade=dados["origem"]["cidade"],
-                uf=dados["origem"]["uf"],
+                cidade=str(origem["cidade"]),
+                uf=str(origem["uf"]).upper(),
             ),
             destino=Local(
-                cidade=dados["destino"]["cidade"],
-                uf=dados["destino"]["uf"],
+                cidade=str(destino["cidade"]),
+                uf=str(destino["uf"]).upper(),
             ),
             partida=partida.isoformat(),
             chegada=chegada.isoformat(),
             duracao_minutos=duracao,
-            preco=preco,
+            preco=Preco(
+                valor=valor,
+                moeda=moeda,
+            ),
             categoria=categoria,
-            assentos_disponiveis=int(dados["vagas"]),
+            assentos_disponiveis=vagas,
         )
 
     def _converter_data(self, valor: str) -> datetime:
@@ -82,98 +241,21 @@ class RotaStrategy(NormalizadorStrategy):
                 tzinfo=ZoneInfo("America/Bahia")
             )
 
-        return data
-
-    def _converter_duracao(self, valor) -> int:
-        duracao = int(valor)
-
-        if duracao <= 0:
-            raise ValueError(
-                "A duração da viagem deve ser maior que zero."
-            )
-
-        return duracao
-
-    def _converter_preco(
-        self,
-        valor_centavos,
-        moeda: str,
-    ) -> Preco:
-
-        valor_centavos = int(valor_centavos)
-
-        if valor_centavos <= 0:
-            raise ValueError(
-                "O preço da passagem deve ser maior que zero."
-            )
-
-        if not moeda:
-            raise ValueError(
-                "A moeda da passagem é obrigatória."
-            )
-
-        valor = valor_centavos / 100
-
-        return Preco(
-            valor=valor,
-            moeda=moeda,
+        return data.astimezone(
+            ZoneInfo("America/Bahia")
         )
 
-    def _normalizar_categoria(self, valor: str) -> str:
+    def _normalizar_categoria(self, valor: str) -> str | None:
+        categoria = str(valor).strip().lower()
+
         categorias = {
             "convencional": "convencional",
+            "convencional executivo": "executivo",
             "executivo": "executivo",
             "semi-leito": "semileito",
             "semileito": "semileito",
+            "semi leito": "semileito",
             "leito": "leito",
         }
 
-        categoria = categorias.get(
-            valor.lower().strip()
-        )
-
-        if categoria is None:
-            raise ValueError(
-                "Categoria de serviço inválida."
-            )
-
-        return categoria
-
-    def _validar_viagem(
-        self,
-        partida: datetime,
-        chegada: datetime,
-        duracao: int,
-        preco: Preco,
-        vagas,
-        origem: dict,
-        destino: dict,
-    ):
-        if chegada <= partida:
-            raise ValueError(
-                "A data de chegada deve ser posterior à data de saída."
-            )
-
-        duracao_real = (
-            chegada - partida
-        ).total_seconds() / 60
-
-        if duracao_real != duracao:
-            raise ValueError(
-                "A duração informada não é compatível com os horários."
-            )
-
-        if vagas < 0:
-            raise ValueError(
-                "A quantidade de assentos não pode ser negativa."
-            )
-
-        if len(origem["uf"]) != 2:
-            raise ValueError(
-                "A UF de origem deve possuir exatamente 2 caracteres."
-            )
-
-        if len(destino["uf"]) != 2:
-            raise ValueError(
-                "A UF de destino deve possuir exatamente 2 caracteres."
-            )
+        return categorias.get(categoria)

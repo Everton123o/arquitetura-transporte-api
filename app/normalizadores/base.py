@@ -5,6 +5,11 @@ from app.models.viagem import ViagemNormalizada
 
 class NormalizadorStrategy(ABC):
 
+    @property
+    @abstractmethod
+    def nome_empresa(self) -> str:
+        pass
+
     @abstractmethod
     def reconhece(self, dados: dict) -> bool:
         pass

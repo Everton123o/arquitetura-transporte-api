@@ -29,9 +29,7 @@ def test_reconhece_progresso():
 def test_normaliza_viagem_progresso():
     strategy = ProgressoStrategy()
 
-    dados = dados_progresso()
-
-    viagem = strategy.normalizar(dados)
+    viagem = strategy.normalizar(dados_progresso())
 
     assert viagem.id_viagem == "PRG-2026-001"
     assert viagem.empresa == "Auto Viação Progresso"
